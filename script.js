@@ -718,7 +718,7 @@ document.addEventListener("DOMContentLoaded", function () {
        ===================================================== */
 
     const API_URL =
-        "https://unstats.un.org/SDGAPI/v1/sdg/Goal/17/Target/List";
+        "https://unstats.un.org/SDGAPI/v1/sdg/Goal/";
 
     const metasApi = document.getElementById("metasApi");
     const statusApi = document.getElementById("statusApi");
@@ -727,6 +727,34 @@ document.addEventListener("DOMContentLoaded", function () {
         document.getElementById("btnAtualizarMetas");
 
     let metasCarregadas = [];
+
+
+    function extrairCodigoOds(valor) {
+
+        if (typeof valor !== "string") {
+            return null;
+        }
+
+        const texto = valor.trim();
+
+        if (!texto) {
+            return null;
+        }
+
+        const match = texto.match(/(?:ods|goal|objetivo)?\s*(\d{1,2})/i);
+
+        if (!match) {
+            return null;
+        }
+
+        const codigo = Number(match[1]);
+
+        if (codigo >= 1 && codigo <= 17) {
+            return String(codigo);
+        }
+
+        return null;
+    }
 
 
     function atualizarStatus(mensagem, tipo = "normal") {
@@ -795,7 +823,79 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
 
-    function renderizarMetas(metas) {
+    async function traduzirTexto(texto, idiomaDestino = "pt") {
+
+        const textoLimpo = String(texto || "").trim();
+
+        if (!textoLimpo) {
+            return "";
+        }
+
+        try {
+
+            const url =
+                "https://api.mymemory.translated.net/get?" +
+                "q=" + encodeURIComponent(textoLimpo) +
+                "&langpair=en|" + idiomaDestino;
+
+            const resposta = await fetch(url);
+
+            if (!resposta.ok) {
+                throw new Error("Falha ao traduzir o texto.");
+            }
+
+            const dados = await resposta.json();
+
+            const textoTraduzido =
+                dados.responseData?.translatedText ||
+                dados.matches?.[0]?.translation ||
+                textoLimpo;
+
+            return textoTraduzido;
+
+        } catch (erro) {
+
+            console.warn("Não foi possível traduzir o texto:", erro);
+            return textoLimpo;
+        }
+    }
+
+
+    async function traduzirMetas(metas) {
+
+        if (!Array.isArray(metas) || metas.length === 0) {
+            return [];
+        }
+
+        const listaTraduzida = [];
+
+        for (const meta of metas) {
+
+            if (!meta || typeof meta !== "object") {
+                listaTraduzida.push(meta);
+                continue;
+            }
+
+            const copia = { ...meta };
+
+            const descricao = obterValor(
+                copia,
+                ["description", "targetDescription", "title", "name"],
+                ""
+            );
+
+            if (descricao) {
+                copia.description = await traduzirTexto(descricao, "pt");
+            }
+
+            listaTraduzida.push(copia);
+        }
+
+        return listaTraduzida;
+    }
+
+
+    function renderizarMetas(metas, codigoOds) {
 
         if (!metasApi) {
             return;
@@ -842,7 +942,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
                     <h3>
                         <i class="fa-solid fa-handshake-angle me-2"></i>
-                        ODS 17
+                        ODS ${codigo}
                     </h3>
 
                     <p>
@@ -856,11 +956,13 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
 
-    async function carregarMetasAPI() {
+    async function carregarMetasAPI(codigoOds = 17) {
 
         if (!metasApi) {
             return;
         }
+
+        const codigo = String(codigoOds).trim();
 
         atualizarStatus(
             '<i class="fa-solid fa-spinner fa-spin me-2"></i> Carregando dados da ONU...'
@@ -876,7 +978,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         try {
 
-            const resposta = await fetch(API_URL);
+            const resposta = await fetch(API_URL + codigo + "/Target/list");
 
             if (!resposta.ok) {
                 throw new Error(
@@ -886,14 +988,15 @@ document.addEventListener("DOMContentLoaded", function () {
 
             const dados = await resposta.json();
 
-            metasCarregadas = extrairMetas(dados);
+            const metasOriginais = extrairMetas(dados);
+            metasCarregadas = await traduzirMetas(metasOriginais);
 
-            renderizarMetas(metasCarregadas);
+            renderizarMetas(metasCarregadas, codigo );
 
             atualizarStatus(
                 `<i class="fa-solid fa-circle-check me-2"></i>
-                 Dados carregados com sucesso da API oficial da ONU.
-                 <strong>${metasCarregadas.length}</strong> registros recebidos.`,
+                 Dados carregados com sucesso da API oficial da ONU e traduzidos para o português.
+                 <strong>${metasCarregadas.length}</strong> registros recebidos para a ODS ${codigo}.`,
                 "sucesso"
             );
 
@@ -930,13 +1033,26 @@ document.addEventListener("DOMContentLoaded", function () {
 
         buscaMeta.addEventListener("input", function () {
 
-            const termo = this.value.toLowerCase().trim();
+            const termo = this.value.trim();
+            const codigo = extrairCodigoOds(termo);
+
+            if (codigo) {
+                carregarMetasAPI(codigo);
+                return;
+            }
+
+            if (termo === "") {
+                carregarMetasAPI();
+                return;
+            }
+
+            const termoBusca = termo.toLowerCase();
 
             const filtradas = metasCarregadas.filter(function (meta) {
 
                 const texto = JSON.stringify(meta).toLowerCase();
 
-                return texto.includes(termo);
+                return texto.includes(termoBusca);
             });
 
             renderizarMetas(filtradas);
